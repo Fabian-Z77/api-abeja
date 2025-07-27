@@ -5,7 +5,9 @@ import uuid
 import json
 import time
 import threading
+import traceback
 from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
 
 # Configuraciones de entorno para optimizar numba y librosa
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
@@ -31,6 +33,7 @@ except Exception as e:
 from predictor import predict_new_audio
 
 app = Flask(__name__)
+CORS(app)  # Habilitar CORS para todas las rutas
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -155,37 +158,61 @@ def health():
         "models_loaded": models_loaded
     })
 
+@app.route('/test', methods=['POST'])
+def test_endpoint():
+    """Endpoint de prueba para verificar que POST funciona"""
+    print("🧪 Test endpoint llamado")
+    return jsonify({
+        "message": "Test exitoso",
+        "task_id": "test-123",
+        "files_received": list(request.files.keys())
+    })
+
 @app.route('/predict', methods=['POST'])
 def predict_audio():
     """Inicia el procesamiento de audio y retorna un task_id"""
     
+    print(f"📨 Recibida request POST a /predict")
+    print(f"📁 Files en request: {list(request.files.keys())}")
+    print(f"📋 Form data: {list(request.form.keys())}")
+    
     if not models_loaded:
-        return jsonify({"error": "Modelos no están cargados correctamente"}), 500
+        error_msg = "Modelos no están cargados correctamente"
+        print(f"❌ {error_msg}")
+        return jsonify({"error": error_msg}), 500
     
     if 'file' not in request.files:
-        return jsonify({"error": "No se envió archivo"}), 400
+        error_msg = "No se envió archivo"
+        print(f"❌ {error_msg}")
+        return jsonify({"error": error_msg}), 400
 
     file = request.files['file']
+    print(f"📎 Archivo recibido: {file.filename}")
+    
     if file.filename == '':
-        return jsonify({"error": "No se seleccionó archivo"}), 400
+        error_msg = "No se seleccionó archivo"
+        print(f"❌ {error_msg}")
+        return jsonify({"error": error_msg}), 400
     
     # Validar tipo de archivo
     allowed_extensions = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
     file_ext = os.path.splitext(file.filename)[1].lower()
     
     if file_ext not in allowed_extensions:
-        return jsonify({
-            "error": f"Tipo de archivo no soportado. Use: {', '.join(allowed_extensions)}"
-        }), 400
+        error_msg = f"Tipo de archivo no soportado. Use: {', '.join(allowed_extensions)}"
+        print(f"❌ {error_msg}")
+        return jsonify({"error": error_msg}), 400
 
     # Generar ID único para esta tarea
     task_id = str(uuid.uuid4())
+    print(f"🆔 Generado task_id: {task_id}")
     
     try:
         # Guardar archivo con nombre único
         safe_filename = f"{task_id}_{file.filename}"
         file_path = os.path.join(UPLOAD_FOLDER, safe_filename)
         file.save(file_path)
+        print(f"💾 Archivo guardado en: {file_path}")
         
         print(f"🎵 Iniciando procesamiento de {file.filename} (Task: {task_id[:8]})")
         
@@ -199,17 +226,24 @@ def predict_audio():
             daemon=True  # El hilo se cierra cuando se cierra la app
         )
         thread.start()
+        print(f"🧵 Hilo de procesamiento iniciado para task {task_id[:8]}")
         
-        return jsonify({
+        response_data = {
             "task_id": task_id,
             "message": "Procesamiento iniciado",
             "progress_url": f"/progress/{task_id}",
             "filename": file.filename
-        })
+        }
+        print(f"✅ Enviando respuesta: {response_data}")
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
-        print(f"❌ Error al iniciar procesamiento: {str(e)}")
-        return jsonify({"error": f"Error al procesar: {str(e)}"}), 500
+        error_msg = f"Error al procesar: {str(e)}"
+        print(f"❌ {error_msg}")
+        print(f"🔍 Traceback completo:")
+        traceback.print_exc()
+        return jsonify({"error": error_msg}), 500
 
 @app.route('/progress/<task_id>')
 def get_progress(task_id):
