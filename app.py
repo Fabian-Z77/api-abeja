@@ -5,7 +5,6 @@ import uuid
 import json
 import time
 import threading
-import traceback
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
@@ -158,16 +157,6 @@ def health():
         "models_loaded": models_loaded
     })
 
-@app.route('/test', methods=['POST'])
-def test_endpoint():
-    """Endpoint de prueba para verificar que POST funciona"""
-    print("🧪 Test endpoint llamado")
-    return jsonify({
-        "message": "Test exitoso",
-        "task_id": "test-123",
-        "files_received": list(request.files.keys())
-    })
-
 @app.route('/predict', methods=['POST'])
 def predict_audio():
     """Inicia el procesamiento de audio y retorna un task_id"""
@@ -241,8 +230,7 @@ def predict_audio():
     except Exception as e:
         error_msg = f"Error al procesar: {str(e)}"
         print(f"❌ {error_msg}")
-        print(f"🔍 Traceback completo:")
-        traceback.print_exc()
+        print(f"🔍 Traceback completo: ", exc_info=True)
         return jsonify({"error": error_msg}), 500
 
 @app.route('/progress/<task_id>')
