@@ -43,6 +43,9 @@ scaler = None
 # Diccionario para almacenar el progreso de cada tarea
 progress_store = {}
 
+import pickle
+import joblib
+
 def load_models():
     """Carga los modelos una sola vez al iniciar la aplicación"""
     global model, scaler
@@ -52,18 +55,26 @@ def load_models():
     
     try:
         print("🤖 Cargando modelo de machine learning...")
-        with open(model_path, 'rb') as f:
-            model = pickle.load(f)
+        try:
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+        except Exception:
+            # Si falla con pickle, probar con joblib
+            model = joblib.load(model_path)
         
         print("📊 Cargando scaler...")
-        with open(scaler_path, 'rb') as f:
-            scaler = pickle.load(f)
+        try:
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+        except Exception:
+            scaler = joblib.load(scaler_path)
             
         print("✅ Modelos cargados correctamente")
         return True
     except Exception as e:
         print(f"❌ Error cargando modelos: {e}")
         return False
+
 
 def update_progress(task_id, stage, progress):
     """Actualiza el progreso de una tarea específica"""
