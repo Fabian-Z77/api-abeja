@@ -103,10 +103,22 @@ def process_audio_with_progress(file_path, task_id):
         if features is None:
             raise Exception("No se pudieron extraer características del audio")
         
+        print(f"🔍 Debug - Features type: {type(features)}, shape: {getattr(features, 'shape', 'No shape')}")
+        print(f"🔍 Debug - Features content (first 5): {features[:5] if hasattr(features, '__getitem__') else features}")
+        
         update_progress(task_id, "Normalizando datos...", 60)
         
         # Normalizar características usando el scaler global
-        features_scaled = scaler.transform([features])
+        # Asegurar que features sea un array 2D
+        if hasattr(features, 'shape'):
+            if len(features.shape) == 1:
+                features = features.reshape(1, -1)
+        else:
+            # Si features no es numpy array, convertirlo
+            features = np.array(features).reshape(1, -1)
+        
+        features_scaled = scaler.transform(features)
+        print(f"🔍 Debug - Features scaled shape: {features_scaled.shape}")
         
         update_progress(task_id, "Procesando con modelo de IA...", 80)
         
@@ -114,15 +126,51 @@ def process_audio_with_progress(file_path, task_id):
         prediction = model.predict(features_scaled)[0]
         probability = model.predict_proba(features_scaled)[0]
         
+        print(f"🔍 Debug - Raw prediction: {prediction}")
+        print(f"🔍 Debug - Raw probability: {probability}")
+        print(f"🔍 Debug - Probability type: {type(probability)}")
+        print(f"🔍 Debug - Probability shape: {getattr(probability, 'shape', 'No shape')}")
+        
         update_progress(task_id, "Finalizando análisis...", 95)
         
-        result = {
-            "prediccion": "Con reina" if prediction == 1 else "Sin reina",
-            "probabilidad_con_reina": round(float(probability[1]), 3),
-            "probabilidad_sin_reina": round(float(probability[0]), 3),
-            "confianza": round(float(max(probability)), 3),
-            "archivo_procesado": os.path.basename(file_path)
-        }
+        # Versión más segura con manejo de errores para probabilidades
+        try:
+            # Convertir probabilidades a lista si es numpy array
+            if hasattr(probability, 'tolist'):
+                prob_list = probability.tolist()
+            else:
+                prob_list = list(probability)
+            
+            print(f"🔍 Debug - Probability list: {prob_list}")
+            
+            # Extraer probabilidades de manera segura
+            prob_sin_reina = float(prob_list[0]) if len(prob_list) > 0 else 0.0
+            prob_con_reina = float(prob_list[1]) if len(prob_list) > 1 else 0.0
+            confianza = float(max(prob_list)) if len(prob_list) > 0 else 0.0
+            
+            result = {
+                "prediccion": "Con reina" if prediction == 1 else "Sin reina",
+                "probabilidad_con_reina": round(prob_con_reina, 3),
+                "probabilidad_sin_reina": round(prob_sin_reina, 3),
+                "confianza": round(confianza, 3),
+                "archivo_procesado": os.path.basename(file_path)
+            }
+            
+            print(f"✅ Debug - Final result: {result}")
+            
+        except Exception as prob_error:
+            print(f"❌ Error procesando probabilidades: {prob_error}")
+            print(f"🔍 Probability original: {probability}")
+            
+            # Fallback: resultado básico sin probabilidades detalladas
+            result = {
+                "prediccion": "Con reina" if prediction == 1 else "Sin reina",
+                "probabilidad_con_reina": 0.5,  # Default fallback
+                "probabilidad_sin_reina": 0.5,  # Default fallback
+                "confianza": 0.5,
+                "archivo_procesado": os.path.basename(file_path),
+                "warning": f"Error procesando probabilidades: {str(prob_error)}"
+            }
         
         update_progress(task_id, "¡Análisis completado!", 100)
         progress_store[task_id]['result'] = result
@@ -133,6 +181,7 @@ def process_audio_with_progress(file_path, task_id):
     except Exception as e:
         error_msg = str(e)
         print(f"❌ Error en task {task_id[:8]}: {error_msg}")
+        print(f"🔍 Error traceback:", exc_info=True)
         progress_store[task_id]['error'] = error_msg
         progress_store[task_id]['completed'] = True
     
@@ -232,7 +281,7 @@ def predict_audio():
             "task_id": task_id,
             "message": "Procesamiento iniciado",
             "progress_url": f"/progress/{task_id}",
-            "filename": file.filename
+            "filename": file.filename,
         }
         print(f"✅ Enviando respuesta: {response_data}")
         
@@ -244,63 +293,28 @@ def predict_audio():
         print(f"🔍 Traceback completo: ", exc_info=True)
         return jsonify({"error": error_msg}), 500
 
-@app.route('/progress/<task_id>')
-def get_progress(task_id):
-    """Endpoint SSE para obtener progreso en tiempo real"""
-    def generate():
-        try:
-            # Esperar hasta que exista la tarea o timeout
-            timeout = 30  # 30 segundos timeout
-            start_time = time.time()
-            
-            while task_id not in progress_store:
-                if time.time() - start_time > timeout:
-                    yield f"data: {json.dumps({'error': 'Task timeout', 'completed': True})}\n\n"
-                    return
-                time.sleep(0.1)
-            
-            # Enviar progreso mientras la tarea esté activa
-            while task_id in progress_store:
-                progress_data = progress_store[task_id].copy()
-                
-                # Enviar datos de progreso
-                yield f"data: {json.dumps(progress_data)}\n\n"
-                
-                # Si completó (con éxito o error), terminar
-                if progress_data.get('completed', False):
-                    # Programar limpieza después de 60 segundos
-                    def cleanup():
-                        progress_store.pop(task_id, None)
-                        print(f"🧹 Limpieza de task {task_id[:8]}")
-                    
-                    timer = threading.Timer(60, cleanup)
-                    timer.start()
-                    break
-                    
-                time.sleep(0.5)  # Actualizar cada 500ms
-                
-        except Exception as e:
-            print(f"❌ Error en SSE para task {task_id[:8]}: {e}")
-            yield f"data: {json.dumps({'error': str(e), 'completed': True})}\n\n"
-    
-    return Response(
-        generate(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Cache-Control'
-        }
-    )
-
 @app.route('/progress/<task_id>', methods=['GET'])
 def get_progress_polling(task_id):
-    """Endpoint alternativo para polling (si SSE no funciona)"""
+    """Endpoint para polling (obtener progreso vía GET)"""
+    print(f"📊 Solicitando progreso para task: {task_id[:8]}")
+    
     if task_id not in progress_store:
+        print(f"❌ Task {task_id[:8]} no encontrado")
         return jsonify({"error": "Task not found"}), 404
     
-    return jsonify(progress_store[task_id])
+    progress_data = progress_store[task_id].copy()
+    print(f"📊 Enviando progreso para task {task_id[:8]}: {progress_data.get('stage', 'Unknown')} - {progress_data.get('progress', 0)}%")
+    
+    # Si la tarea está completa, programar limpieza después de 60 segundos
+    if progress_data.get('completed', False):
+        def cleanup():
+            progress_store.pop(task_id, None)
+            print(f"🧹 Limpieza de task {task_id[:8]}")
+        
+        timer = threading.Timer(60, cleanup)
+        timer.start()
+    
+    return jsonify(progress_data)
 
 @app.errorhandler(413)
 def too_large(e):
